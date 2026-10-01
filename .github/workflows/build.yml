@@ -1,0 +1,60 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 1. Берём игру: из любого .zip в корне (приоритет) или из готовой папки www
+      - name: Prepare www
+        run: |
+          ZIP=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$ZIP" ]; then
+            rm -rf _unz www
+            mkdir _unz
+            unzip -q "$ZIP" -d _unz
+            IDX=$(find _unz -name index.html -not -path "*/node_modules/*" | awk '{print length($0) " " $0}' | sort -n | head -1 | cut -d' ' -f2-)
+            if [ -z "$IDX" ]; then echo "index.html не найден в zip"; exit 1; fi
+            mkdir www
+            cp -r "$(dirname "$IDX")"/. www/
+          fi
+          test -f www/index.html || { echo "Нет www/index.html"; exit 1; }
+          ls -la www
+
+      # 2. Создаём Android-проект Capacitor
+      - name: Setup Capacitor
+        run: |
+          if [ ! -f package.json ]; then npm init -y; fi
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
+            npx cap init "The Last Sessions" com.lastsessions.game --web-dir www
+          fi
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+          sed -i '0,/<activity/s//<activity android:screenOrientation="sensorLandscape"/' android/app/src/main/AndroidManifest.xml
+
+      # 3. Сборка APK
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: The-Last-Sessions-APK
+          path: android/app/build/outputs/apk/debug/*.apk
